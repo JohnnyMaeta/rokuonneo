@@ -33,23 +33,23 @@
 -->
 
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
-  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>音声録音アプリ (MP3対応)</title>
   <style>
-    /* CSSは変更なし */
     body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
     .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 500px; margin: auto;}
     h1 { color: #007bff; text-align: center; }
     .input-group { margin-bottom: 15px; }
     .input-group label { display: block; margin-bottom: 5px; font-weight: bold; }
     .input-group input[type="text"] {
-      width: calc(100% - 22px); /* paddingとborderを考慮 */
+      width: calc(100% - 22px);
       padding: 10px;
       border: 1px solid #ccc;
       border-radius: 4px;
-      box-sizing: border-box; /* paddingとborderをwidth/heightに含める */
+      box-sizing: border-box;
     }
     button {
       background-color: #007bff; color: white; border: none; padding: 10px 20px;
@@ -84,6 +84,9 @@
   </div>
 
   <script>
+    // ★★★ GAS Web App の URL をここに設定してください ★★★
+    const GAS_WEB_APP_URL = 'YOUR_GAS_WEB_APP_URL_HERE';
+
     const recordButton = document.getElementById('recordButton');
     const stopButton = document.getElementById('stopButton');
     const saveButton = document.getElementById('saveButton');
@@ -122,7 +125,7 @@
 
           recordButton.disabled = false;
           stopButton.disabled = true;
-          saveButton.disabled = false; // 録音停止時に保存ボタンを有効化
+          saveButton.disabled = false;
           statusDisplay.textContent = '録音停止。再生またはMP3で保存が可能です。';
           audioChunks = [];
           downloadLink.style.display = 'none';
@@ -134,7 +137,7 @@
         statusDisplay.textContent = '録音中...';
         recordButton.disabled = true;
         stopButton.disabled = false;
-        saveButton.disabled = true; // 録音中は保存ボタンを無効化
+        saveButton.disabled = true;
         prefixNameInput.disabled = true;
         audioPlayback.hidden = true;
         audioPlayback.src = '';
@@ -162,7 +165,6 @@
         return;
       }
 
-      // --- ボタン制御 ---
       statusDisplay.textContent = 'MP3にエンコード中... しばらくお待ちください。';
       saveButton.disabled = true;
       recordButton.disabled = true;
@@ -187,7 +189,7 @@
         statusDisplay.textContent = 'エンコード完了。ドライブに保存中...';
 
         const reader = new FileReader();
-        reader.onloadend = () => {
+        reader.onloadend = async () => {
           const audioDataUrl = reader.result;
           console.log('Data URL for MP3 (first 100 chars):', audioDataUrl.substring(0,100));
 
@@ -200,38 +202,41 @@
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
           const baseFileName = `${userPrefix}_recording-${timestamp}`;
 
-          google.script.run
-            .withSuccessHandler(response => {
-              if (response.success) {
-                statusDisplay.textContent = response.message;
-                // ★★★ ここが重要な変更点 ★★★
-                // 保存が成功したら、保存ボタンは無効のままにする
-                saveButton.disabled = true; 
-              } else {
-                statusDisplay.textContent = `保存失敗: ${response.message}`;
-                // 保存失敗時は、再度保存を試せるようにボタンを有効化
-                saveButton.disabled = false;
-                console.error('GAS Save Error:', response.message);
-              }
-              // 録音開始ボタンと入力欄は常に有効化する
-              recordButton.disabled = false;
-              prefixNameInput.disabled = false;
-            })
-            .withFailureHandler(error => {
-              statusDisplay.textContent = `サーバーエラー: ${error.message}`;
-              console.error('GAS Server Error:', error);
-              // サーバーエラー時も、操作を可能に戻す
+          try {
+            const response = await fetch(GAS_WEB_APP_URL, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'text/plain;charset=utf-8',
+              },
+              body: JSON.stringify({
+                action: 'saveAudioFile',
+                audioDataUrl: audioDataUrl,
+                baseFileName: baseFileName
+              })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+              statusDisplay.textContent = result.message;
+              saveButton.disabled = true;
+            } else {
+              statusDisplay.textContent = `保存失敗: ${result.message}`;
               saveButton.disabled = false;
-              recordButton.disabled = false;
-              prefixNameInput.disabled = false;
-            })
-            .saveAudioFile(audioDataUrl, baseFileName);
+              console.error('GAS Save Error:', result.message);
+            }
+          } catch (fetchError) {
+            statusDisplay.textContent = `サーバーエラー: ${fetchError.message}`;
+            console.error('Fetch Error:', fetchError);
+            saveButton.disabled = false;
+          }
+          recordButton.disabled = false;
+          prefixNameInput.disabled = false;
         };
         reader.readAsDataURL(mp3Blob);
       } catch (error) {
         console.error("MP3エンコードエラー:", error);
         statusDisplay.textContent = `MP3エンコードエラー: ${error.message}.詳細はコンソールを確認してください。`;
-        // エンコードエラー時も、操作を可能に戻す
         saveButton.disabled = false;
         recordButton.disabled = false;
         prefixNameInput.disabled = false;
@@ -239,7 +244,6 @@
     };
 
     async function encodeToMp3(audioBlob) {
-        // この関数は変更なし
         console.log("Starting MP3 encoding for blob type:", audioBlob.type, "size:", audioBlob.size);
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const arrayBuffer = await audioBlob.arrayBuffer();

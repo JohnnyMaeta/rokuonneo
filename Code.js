@@ -29,31 +29,61 @@
  * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-*  SOFTWARE.
+ * SOFTWARE.
  */
 
-// Code.gs
+// Code.gs - Web API として動作するサーバーサイドコード
 
-// (前半の定数定義などは変更なし)
 const PARENT_FOLDER_NAME = "録音くん保存フォルダ";
 const SPREADSHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
 const SUBFOLDER_SHEET_NAME = "シート1";
 const SUBFOLDER_CELL = "B1";
 const HISTORY_SHEET_NAME = "履歴";
-const HISTORY_HEADERS = ["ファイル名", "保存日時", "フォルダパス", "ファイルリンク"]; // 変更なし
+const HISTORY_HEADERS = ["ファイル名", "保存日時", "フォルダパス", "ファイルリンク"];
 
 /**
- * doGet, getOrCreateFolderIdByName, getSubFolderNameFromSheet は変更なし
+ * GETリクエストのハンドラ（ヘルスチェック用）
  */
 function doGet(e) {
-  createHistorySheetIfNotExists();
-  return HtmlService.createHtmlOutputFromFile('app')
-      .setTitle('音声録音アプリ (MP3対応)')
-      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  const output = ContentService.createTextOutput(
+    JSON.stringify({ status: "ok", message: "録音アプリ API は稼働中です。" })
+  );
+  output.setMimeType(ContentService.MimeType.JSON);
+  return output;
+}
+
+/**
+ * POSTリクエストのハンドラ（フロントエンドからのAPI呼び出し）
+ */
+function doPost(e) {
+  try {
+    const requestData = JSON.parse(e.postData.contents);
+    const action = requestData.action;
+
+    let result;
+    switch (action) {
+      case "saveAudioFile":
+        result = saveAudioFile(requestData.audioDataUrl, requestData.baseFileName);
+        break;
+      default:
+        result = { success: false, message: "不明なアクションです: " + action };
+    }
+
+    const output = ContentService.createTextOutput(JSON.stringify(result));
+    output.setMimeType(ContentService.MimeType.JSON);
+    return output;
+
+  } catch (error) {
+    Logger.log("doPost エラー: " + error.toString());
+    const output = ContentService.createTextOutput(
+      JSON.stringify({ success: false, message: "サーバーエラー: " + error.message })
+    );
+    output.setMimeType(ContentService.MimeType.JSON);
+    return output;
+  }
 }
 
 function getOrCreateFolderIdByName(folderName, parentFolder = DriveApp.getRootFolder()) {
-  // (内容は変更なし)
   if (!folderName || typeof folderName !== 'string' || folderName.trim() === '') {
     throw new Error("有効なフォルダ名が指定されていません。");
   }
@@ -73,7 +103,6 @@ function getOrCreateFolderIdByName(folderName, parentFolder = DriveApp.getRootFo
 }
 
 function getSubFolderNameFromSheet() {
-  // (内容は変更なし)
   try {
     const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const sheet = ss.getSheetByName(SUBFOLDER_SHEET_NAME);
@@ -86,7 +115,7 @@ function getSubFolderNameFromSheet() {
       Logger.log(`セル "${SUBFOLDER_CELL}" にサブフォルダ名が入力されていません。`);
       return null;
     }
-    return subFolderName.replace(/[\\\/:\*\?"<>\|]/g, '_');
+    return subFolderName.replace(/[\\\/:*?"<>|]/g, '_');
   } catch (e) {
     Logger.log(`スプレッドシートからのサブフォルダ名取得エラー: ${e.toString()}`);
     return null;
@@ -104,11 +133,10 @@ function createHistorySheetIfNotExists() {
     sheet = ss.insertSheet(HISTORY_SHEET_NAME);
     sheet.appendRow(HISTORY_HEADERS);
     sheet.getRange(1, 1, 1, HISTORY_HEADERS.length).setFontWeight("bold");
-    // 列幅の調整 (任意)
-    sheet.setColumnWidth(1, 250); // ファイル名
-    sheet.setColumnWidth(2, 150); // 保存日時
-    sheet.setColumnWidth(3, 250); // フォルダパス (リンク表示のため少し広めに)
-    sheet.setColumnWidth(4, 300); // ファイルリンク
+    sheet.setColumnWidth(1, 250);
+    sheet.setColumnWidth(2, 150);
+    sheet.setColumnWidth(3, 250);
+    sheet.setColumnWidth(4, 300);
     Logger.log(`履歴シート "${HISTORY_SHEET_NAME}" を作成しました。`);
   }
   return sheet;
@@ -116,26 +144,16 @@ function createHistorySheetIfNotExists() {
 
 /**
  * 履歴シートに録音情報を追記します。
- * @param {string} fileName - 保存されたファイル名。
- * @param {string} folderPathText - 保存されたフォルダの表示用パス (例: 親フォルダ > サブフォルダ)。
- * @param {string} folderUrl - 保存されたフォルダのGoogleドライブURL。
- * @param {string} fileUrl - 保存されたファイルのGoogleドライブURL。
  */
-function addRecordToHistorySheet(fileName, folderPathText, folderUrl, fileUrl) { // folderUrl を追加
+function addRecordToHistorySheet(fileName, folderPathText, folderUrl, fileUrl) {
   try {
     const sheet = createHistorySheetIfNotExists();
     const timestamp = new Date();
     const formattedTimestamp = Utilities.formatDate(timestamp, Session.getScriptTimeZone(), "yyyy/MM/dd HH:mm:ss");
 
-    // フォルダパスのハイパーリンクを作成
     const folderLinkFormula = `=HYPERLINK("${folderUrl}","${folderPathText}")`;
-    // ファイルリンクのハイパーリンクを作成 (ファイル名は表示テキストにする)
     const fileLinkFormula = `=HYPERLINK("${fileUrl}","${fileName}")`;
 
-
-    // データを追記 [ファイル名(表示用), 日時, フォルダパス(ハイパーリンク数式), ファイルリンク(ハイパーリンク数式)]
-    // ファイル名の列は直接ファイル名を表示し、ファイルリンク列にファイルへのリンクを置くため、
-    // HISTORY_HEADERS に合わせて fileName をそのまま入れる
     sheet.appendRow([fileName, formattedTimestamp, folderLinkFormula, fileLinkFormula]);
 
     Logger.log(`履歴を記録しました: ${fileName}, ${formattedTimestamp}, フォルダ: ${folderPathText} (${folderUrl}), ファイル: ${fileUrl}`);
@@ -148,9 +166,6 @@ function addRecordToHistorySheet(fileName, folderPathText, folderUrl, fileUrl) {
 /**
  * Base64エンコードされた音声データ (Data URL形式) をデコードし、
  * 指定されたファイル名でGoogleドライブの指定フォルダにMP3ファイルとして保存し、履歴を記録します。
- * @param {string} audioDataUrl - "data:audio/mpeg;base64,..." の形式の音声データURL。
- * @param {string} baseFileName - 保存するファイルのベース名 (拡張子なしを期待)。
- * @return {Object} 保存処理の結果。
  */
 function saveAudioFile(audioDataUrl, baseFileName) {
   try {
@@ -166,18 +181,18 @@ function saveAudioFile(audioDataUrl, baseFileName) {
 
     const subFolderNameRaw = getSubFolderNameFromSheet();
     let targetFolder;
-    let folderPathText; // 表示用のパス
-    let targetFolderUrl; // 実際のフォルダURL
+    let folderPathText;
+    let targetFolderUrl;
 
     if (subFolderNameRaw) {
       const subFolderId = getOrCreateFolderIdByName(subFolderNameRaw, parentFolder);
       targetFolder = DriveApp.getFolderById(subFolderId);
       folderPathText = `${parentFolder.getName()} > ${targetFolder.getName()}`;
-      targetFolderUrl = targetFolder.getUrl(); // サブフォルダのURL
+      targetFolderUrl = targetFolder.getUrl();
     } else {
       targetFolder = parentFolder;
       folderPathText = parentFolder.getName();
-      targetFolderUrl = parentFolder.getUrl(); // 親フォルダのURL
+      targetFolderUrl = parentFolder.getUrl();
       Logger.log(`サブフォルダ名が取得できなかったため、親フォルダ "${parentFolder.getName()}" に保存します。`);
     }
 
@@ -202,7 +217,6 @@ function saveAudioFile(audioDataUrl, baseFileName) {
     const file = targetFolder.createFile(blob);
     const fileUrl = file.getUrl();
 
-    // 履歴シートに記録 (targetFolderUrl を渡す)
     addRecordToHistorySheet(finalFileName, folderPathText, targetFolderUrl, fileUrl);
 
     Logger.log(`ファイル "${finalFileName}" (ID: ${file.getId()}) をフォルダ "${folderPathText}" に保存しました。URL: ${fileUrl}`);
@@ -255,7 +269,7 @@ function test_FolderStructureAndSheetReadAndHistory() {
     Logger.log(`想定保存パス: ${folderPathText}`);
 
     const testFileName = "test_recording_with_links.mp3";
-    const testFileUrl = "https://drive.google.com/file/d/dummy_file_id/view?usp=sharing"; // ダミーファイルURL
+    const testFileUrl = "https://drive.google.com/file/d/dummy_file_id/view?usp=sharing";
     addRecordToHistorySheet(testFileName, folderPathText, folderUrl, testFileUrl);
     Logger.log("ダミー履歴の記録テスト完了。履歴シートを確認してください (フォルダパスとファイルリンクがハイパーリンクになっているはずです)。");
 
